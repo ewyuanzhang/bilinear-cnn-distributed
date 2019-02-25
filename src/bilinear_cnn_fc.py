@@ -125,6 +125,10 @@ class BCNNManager(object):
                 # Backward pass.
                 loss.backward()
                 self._solver.step()
+
+            # Release cuda cache of the last batch of trainig data
+            torch.cuda.empty_cache()
+
             train_acc = 100 * num_correct / num_total
             test_acc = self._accuracy(self._test_loader)
             self._scheduler.step(test_acc)
@@ -138,6 +142,8 @@ class BCNNManager(object):
                                         'vgg_16_epoch_%d.pth' % (t + 1)))
             print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%' %
                   (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc))
+            # Release cuda cache of the last batch of test data
+            torch.cuda.empty_cache()
         print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
 
     def _accuracy(self, data_loader):
