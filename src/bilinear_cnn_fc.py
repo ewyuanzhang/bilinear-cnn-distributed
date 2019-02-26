@@ -17,6 +17,7 @@ import torch
 import torchvision
 
 import cub200
+import aircraft
 from bcnn import BCNN
 
 torch.manual_seed(0)
@@ -57,7 +58,13 @@ class BCNNManager(object):
         self._options = options
         self._path = path
         # Network.
-        self._net = torch.nn.DataParallel(BCNN(pretrained=True)).cuda()
+        if self._options['dataset'] == 'cub200':
+            num_classes = 200
+        elif self._options['dataset'] == 'aircraft':
+            num_classes = 100
+        else:
+            raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
+        self._net = torch.nn.DataParallel(BCNN(num_classes=num_classes, pretrained=True)).cuda()
         print(self._net)
         # Criterion.
         self._criterion = torch.nn.CrossEntropyLoss().cuda()
@@ -84,12 +91,22 @@ class BCNNManager(object):
             torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406),
                                              std=(0.229, 0.224, 0.225))
         ])
-        train_data = cub200.CUB200(
-            root=self._path['cub200'], train=True, download=True,
-            transform=train_transforms)
-        test_data = cub200.CUB200(
-            root=self._path['cub200'], train=False, download=True,
-            transform=test_transforms)
+        if self._options['dataset'] == 'cub200':
+            train_data = cub200.CUB200(
+                root=self._path['dataset'], train=True, download=True,
+                transform=train_transforms)
+            test_data = cub200.CUB200(
+                root=self._path['dataset'], train=False, download=True,
+                transform=test_transforms)
+        elif self._options['dataset'] == 'aircraft':
+            train_data = aircraft.Aircraft(
+                root=self._path['dataset'], train=True, download=True,
+                transform=train_transforms)
+            test_data = aircraft.Aircraft(
+                root=self._path['dataset'], train=False, download=True,
+                transform=test_transforms)
+        else:
+            raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
         self._train_loader = torch.utils.data.DataLoader(
             train_data, batch_size=self._options['batch_size'],
             shuffle=True, num_workers=4, pin_memory=True)
@@ -205,6 +222,9 @@ def main():
                         required=True, help='Epochs for training.')
     parser.add_argument('--weight_decay', dest='weight_decay', type=float,
                         required=True, help='Weight decay.')
+    parser.add_argument('--dataset', dest='dataset', type=str, required=False,
+                        default="cub200",
+                        help='The dataset for training.')
     args = parser.parse_args()
     if args.base_lr <= 0:
         raise AttributeError('--base_lr parameter must >0.')
@@ -220,11 +240,12 @@ def main():
         'batch_size': args.batch_size,
         'epochs': args.epochs,
         'weight_decay': args.weight_decay,
+        'dataset': args.dataset,
     }
 
     project_root = os.popen('pwd').read().strip()
     path = {
-        'cub200': os.path.join(project_root, 'data/cub200'),
+        'dataset': os.path.join(project_root, 'data', options['dataset']),
         'model': os.path.join(project_root, 'model'),
     }
     for d in path:

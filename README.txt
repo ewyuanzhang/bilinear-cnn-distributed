@@ -26,6 +26,7 @@ PREREQUIREMENTS
 LAYOUT
     ./data/                 # Datasets
     ./doc/                  # Automatically generated documents
+    ./model/                # Saved models
     ./src/                  # Source code
 
 
@@ -33,17 +34,14 @@ USAGE
     Step 1. Fine-tune the fc layer only. It gives 76.77% test set accuracy.
     $ CUDA_VISIBLE_DEVICES=0,1,2,3 ./src/bilinear_cnn_fc.py --base_lr 1.0 \
           --batch_size 64 --epochs 55 --weight_decay 1e-8 \
+          --dataset cub200 \
           | tee "[fc-] base_lr_1.0-weight_decay_1e-8-epoch_.log"
 
     Step 2. Fine-tune all layers. It gives 84.17% test set accuracy.
     $ CUDA_VISIBLE_DEVICES=0,1,2,3 ./src/bilinear_cnn_all.py --base_lr 1e-2 \
           --batch_size 64 --epochs 25 --weight_decay 1e-5 \
-          --model "model.pth" \
+          --dataset cub200 --model "model.pth" \
           | tee "[all-] base_lr_1e-2-weight_decay_1e-5-epoch_.log"
-
-
-AUTHOR
-    Hao Zhang: zhangh0214@gmail.com
 
 
 LICENSE
