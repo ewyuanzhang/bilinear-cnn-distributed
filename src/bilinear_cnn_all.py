@@ -15,7 +15,9 @@ import os
 import time
 
 import torch
+from torch.utils.data import distributed
 import torchvision
+import horovod.torch as hvd
 
 import cub200
 import aircraft
@@ -25,7 +27,7 @@ torch.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
 
-__all__ = ['BCNN', 'BCNNManager']
+__all__ = ['BCNNManager']
 __author__ = 'Yuan Zhang'
 __copyright__ = '2018 LAMDA'
 __date__ = '2019-02-22'
@@ -65,16 +67,21 @@ class BCNNManager(object):
             num_classes = 100
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
-        self._net = torch.nn.DataParallel(BCNN(num_classes=num_classes, pretrained=False)).cuda()
+        self._net = BCNN(num_classes=num_classes, pretrained=False).cuda()
         # Load the model from disk.
         self._net.load_state_dict(torch.load(self._path['model']))
-        print(self._net)
+        # Broadcast parameters from rank 0 to all other processes.
+        hvd.broadcast_parameters(self._net.state_dict(), root_rank=0)
+        if hvd.rank() == 0:
+            print(self._net)
         # Criterion.
         self._criterion = torch.nn.CrossEntropyLoss().cuda()
         # Solver.
         self._solver = torch.optim.SGD(
-            self._net.parameters(), lr=self._options['base_lr'],
+            self._net.parameters(), lr=self._options['base_lr'] * hvd.size(),
             momentum=0.9, weight_decay=self._options['weight_decay'])
+        self._solver = hvd.DistributedOptimizer(self._solver, named_parameters=self._net.named_parameters())
+
         self._scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self._solver, mode='max', factor=0.1, patience=3, verbose=True,
             threshold=1e-4)
@@ -110,19 +117,28 @@ class BCNNManager(object):
                 transform=test_transforms)
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
+        # Partition dataset among workers using DistributedSampler
+        train_sampler = distributed.DistributedSampler(
+            train_data, num_replicas=hvd.size(), rank=hvd.rank())
+        test_sampler = distributed.DistributedSampler(
+            test_data, num_replicas=hvd.size(), rank=hvd.rank())
+
         self._train_loader = torch.utils.data.DataLoader(
             train_data, batch_size=self._options['batch_size'],
-            shuffle=True, num_workers=4, pin_memory=True)
+            shuffle=False, num_workers=4, pin_memory=True,
+            sampler=train_sampler)
         self._test_loader = torch.utils.data.DataLoader(
-            test_data, batch_size=16,
-            shuffle=False, num_workers=4, pin_memory=True)
+            test_data, batch_size=min(16, self._options['batch_size']),
+            shuffle=False, num_workers=4, pin_memory=True,
+            sampler=test_sampler)
 
     def train(self):
         """Train the network."""
-        print('Training.')
         best_acc = 0.0
         best_epoch = None
-        print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
+        if hvd.rank() == 0:
+            print('Training.')
+            print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
         for t in range(self._options['epochs']):
             t0 = time.time()
             epoch_loss = []
@@ -146,16 +162,26 @@ class BCNNManager(object):
                 # Backward pass.
                 loss.backward()
                 self._solver.step()
-            train_acc = 100 * num_correct / num_total
+
+            # Release cuda cache of the last batch of trainig data
+            torch.cuda.empty_cache()
+
             test_acc = self._accuracy(self._test_loader)
-            self._scheduler.step(test_acc)
-            if test_acc > best_acc:
-                best_acc = test_acc
-                best_epoch = t + 1
-                print('*', end='')
-            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
-                  (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
-        print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
+            if hvd.rank() == 0:
+                train_acc = 100 * num_correct / num_total
+                self._scheduler.step(test_acc)
+                if test_acc > best_acc:
+                    best_acc = test_acc
+                    best_epoch = t + 1
+                    print('*', end='')
+                print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
+                      (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
+
+            hvd.broadcast_optimizer_state(self._solver, root_rank=0)
+            # Release cuda cache of the last batch of test data
+            torch.cuda.empty_cache()
+        if hvd.rank() == 0:
+            print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
 
     def _accuracy(self, data_loader):
         """Compute the train/test accuracy.
@@ -249,6 +275,11 @@ def main():
             assert os.path.isfile(path[d])
         else:
             assert os.path.isdir(path[d])
+
+    # Initialize Horovod
+    hvd.init()
+    # Pin GPU to be used to process local rank (one GPU per process)
+    torch.cuda.set_device(hvd.local_rank())
 
     manager = BCNNManager(options, path)
     # manager.getStat()
