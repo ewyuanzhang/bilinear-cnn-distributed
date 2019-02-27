@@ -12,6 +12,7 @@ This file is modified from:
 
 
 import os
+import time
 
 import torch
 import torchvision
@@ -64,7 +65,7 @@ class BCNNManager(object):
             num_classes = 100
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
-        self._net = torch.nn.DataParallel(BCNN(num_classes=num_classes, pretrained=True)).cuda()
+        self._net = torch.nn.DataParallel(BCNN(num_classes=num_classes, pretrained=False)).cuda()
         # Load the model from disk.
         self._net.load_state_dict(torch.load(self._path['model']))
         print(self._net)
@@ -121,8 +122,9 @@ class BCNNManager(object):
         print('Training.')
         best_acc = 0.0
         best_epoch = None
-        print('Epoch\tTrain loss\tTrain acc\tTest acc')
+        print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
         for t in range(self._options['epochs']):
+            t0 = time.time()
             epoch_loss = []
             num_correct = 0
             num_total = 0
@@ -151,8 +153,8 @@ class BCNNManager(object):
                 best_acc = test_acc
                 best_epoch = t + 1
                 print('*', end='')
-            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%' %
-                  (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc))
+            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
+                  (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
         print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
 
     def _accuracy(self, data_loader):
