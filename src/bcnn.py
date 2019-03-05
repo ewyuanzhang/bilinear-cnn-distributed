@@ -65,6 +65,8 @@ class BCNN(torch.nn.Module):
             self.trainable_params = [
                 {'params': self.fc.parameters()}
             ]
+        else:
+            self.trainable_params = self.parameters()
 
     def forward(self, X):
         """Forward pass of the network.
