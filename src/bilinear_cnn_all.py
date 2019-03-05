@@ -3,8 +3,15 @@
 """Fine-tune all layers for bilinear CNN.
 
 Usage:
-    CUDA_VISIBLE_DEVICES=0,1,2,3 ./src/bilinear_cnn_all.py --base_lr 0.05 \
-        --batch_size 64 --epochs 100 --weight_decay 5e-4
+    CUDA_VISIBLE_DEVICES=0,1 mpirun -np 2 \
+          -H localhost:2 \
+          -bind-to none -map-by slot \
+          -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
+          -mca pml ob1 -mca btl ^openib \
+          python ./src/bilinear_cnn_all.py --base_lr 1e-3 \
+          --batch_size 8 --epochs 40 --weight_decay 1e-5 \
+          --dataset cub200 --model "model.pth" \
+          | tee "[all-] base_lr_1e-2-weight_decay_1e-5-epoch_.log"
 
 This file is modified from:
     https://github.com/HaoMood/blinear-cnn.
@@ -167,6 +174,8 @@ class BCNNManager(object):
             torch.cuda.empty_cache()
 
             test_acc = self._accuracy(self._test_loader)
+            # Release cuda cache of the last batch of test data
+            torch.cuda.empty_cache()
             if hvd.rank() == 0:
                 train_acc = 100 * num_correct / num_total
                 self._scheduler.step(test_acc)
@@ -176,10 +185,8 @@ class BCNNManager(object):
                     print('*', end='')
                 print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
                       (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
-
             hvd.broadcast_optimizer_state(self._solver, root_rank=0)
-            # Release cuda cache of the last batch of test data
-            torch.cuda.empty_cache()
+
         if hvd.rank() == 0:
             print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
 
