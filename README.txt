@@ -31,13 +31,14 @@ LAYOUT
 
 
 USAGE
+<<<<<<< HEAD
     Step 1. Fine-tune the fc layer only. It gives 77.32% test set accuracy on CUB200 and 70.01% test set accuracy on FGVC-Aircraft.
     $ CUDA_VISIBLE_DEVICES=0,1 mpirun -np 2 \
           -H localhost:2 \
           -bind-to none -map-by slot \
           -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
           -mca pml ob1 -mca btl ^openib \
-          python ./src/bilinear_cnn_fc.py --base_lr 1.0 \
+          python ./src/train.py fc --base_lr 1.0 \
           --batch_size 16 --epochs 55 --weight_decay 1e-8 \
           --dataset cub200 \
           | tee "[fc-] base_lr_1.0-weight_decay_1e-8-epoch_.log"
@@ -48,7 +49,7 @@ USAGE
           -bind-to none -map-by slot \
           -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
           -mca pml ob1 -mca btl ^openib \
-          python ./src/bilinear_cnn_all.py --base_lr 1e-3 \
+          python ./src/train.py all --base_lr 1e-3 \
           --batch_size 8 --epochs 40 --weight_decay 1e-5 \
           --dataset cub200 --model "model.pth" \
           | tee "[all-] base_lr_1e-2-weight_decay_1e-5-epoch_.log"

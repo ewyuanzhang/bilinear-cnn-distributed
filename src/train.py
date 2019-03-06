@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Fine-tune the fc layer only for bilinear CNN.
+"""Train bilinear CNN.
 
 Usage:
     CUDA_VISIBLE_DEVICES=0,1 mpirun -np 2 \
@@ -8,7 +8,7 @@ Usage:
           -bind-to none -map-by slot \
           -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
           -mca pml ob1 -mca btl ^openib \
-          python ./src/bilinear_cnn_fc.py --base_lr 1.0 \
+          python ./src/train.py fc --base_lr 1.0 \
           --batch_size 16 --epochs 55 --weight_decay 1e-8 \
           --dataset cub200 \
           | tee "[fc-] base_lr_1.0-weight_decay_1e-8-epoch_.log"
@@ -74,7 +74,10 @@ class BCNNManager(object):
             num_classes = 100
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
-        self._net = BCNN(num_classes=num_classes, pretrained=True).cuda()
+        self._net = BCNN(num_classes=num_classes, pretrained=options['target'] == 'fc').cuda()
+        # Load the model from disk.
+        if options['target'] == 'all':
+            self._net.load_state_dict(torch.load(self._path['model']))
         # Broadcast parameters from rank 0 to all other processes.
         hvd.broadcast_parameters(self._net.state_dict(), root_rank=0)
         if hvd.rank() == 0:
@@ -186,7 +189,7 @@ class BCNNManager(object):
                     print('*', end='')
                     # Save model onto disk.
                     torch.save(self._net.state_dict(),
-                               os.path.join(self._path['model'],
+                               os.path.join(self._path['model_dir'],
                                             'vgg_16_epoch_%d.pth' % (t + 1)))
                 print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
                       (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
@@ -246,6 +249,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(
         description='Train bilinear CNN on CUB200.')
+    parser.add_argument('target', choices=['fc', 'all'],
+                        help='Target training layers.')
     parser.add_argument('--base_lr', dest='base_lr', type=float, required=True,
                         help='Base learning rate for training.')
     parser.add_argument('--batch_size', dest='batch_size', type=int,
@@ -254,8 +259,9 @@ def main():
                         required=True, help='Epochs for training.')
     parser.add_argument('--weight_decay', dest='weight_decay', type=float,
                         required=True, help='Weight decay.')
-    parser.add_argument('--dataset', dest='dataset', type=str, required=False,
-                        default="cub200",
+    parser.add_argument('--model', dest='model', type=str, default="",
+                        help='Model for fine-tuning.')
+    parser.add_argument('--dataset', dest='dataset', type=str, default="cub200",
                         help='The dataset for training.')
     args = parser.parse_args()
     if args.base_lr <= 0:
@@ -264,10 +270,11 @@ def main():
         raise AttributeError('--batch_size parameter must >0.')
     if args.epochs < 0:
         raise AttributeError('--epochs parameter must >=0.')
-    if args.weight_decay <= 0:
+    if args.weight_decay < 0:
         raise AttributeError('--weight_decay parameter must >0.')
 
     options = {
+        'target': args.target,
         'base_lr': args.base_lr,
         'batch_size': args.batch_size,
         'epochs': args.epochs,
@@ -278,11 +285,19 @@ def main():
     project_root = os.popen('pwd').read().strip()
     path = {
         'dataset': os.path.join(project_root, 'data', options['dataset']),
-        'model': os.path.join(project_root, 'model'),
+        'model_dir': os.path.join(project_root, 'model'),
     }
+    if options['target'] == 'all':
+        path['model'] = os.path.join(path['model_dir'], args.model)
     for d in path:
-        if not os.path.isdir(path[d]):
-            os.makedirs(path[d])
+        if options['target'] == 'fc':
+            if not os.path.isdir(path[d]):
+                os.makedirs(path[d])
+        else:
+            if d == 'model':
+                assert os.path.isfile(path[d])
+            else:
+                assert os.path.isdir(path[d])
 
     # Initialize Horovod
     hvd.init()
