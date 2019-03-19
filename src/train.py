@@ -178,11 +178,12 @@ class BCNNManager(object):
             torch.cuda.empty_cache()
 
             test_acc = self._accuracy(self._test_loader)
+            self._scheduler.step(test_acc)
             # Release cuda cache of the last batch of test data
             torch.cuda.empty_cache()
+
             if hvd.rank() == 0:
                 train_acc = 100 * num_correct / num_total
-                self._scheduler.step(test_acc)
                 if test_acc > best_acc:
                     best_acc = test_acc
                     best_epoch = t + 1
@@ -193,7 +194,6 @@ class BCNNManager(object):
                                             'vgg_16_epoch_%d.pth' % (t + 1)))
                 print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
                       (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
-            hvd.broadcast_optimizer_state(self._solver, root_rank=0)
             
         if hvd.rank() == 0:
             print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
@@ -219,8 +219,11 @@ class BCNNManager(object):
             score = self._net(X)
             _, prediction = torch.max(score.data, 1)
             num_total += y.size(0)
-            num_correct += torch.sum(prediction == y.data).item()
+            num_correct += torch.sum(prediction == y.data)
         self._net.train(True)  # Set the model to training phase
+        num_total = hvd.allreduce(torch.tensor(num_total), average=False).data.item()
+        num_correct = hvd.allreduce(
+            num_correct.detach().cpu(), average=False).type(torch.cuda.FloatTensor)
         return 100 * num_correct / num_total
 
     def getStat(self):
