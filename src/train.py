@@ -139,7 +139,7 @@ class BCNNManager(object):
             shuffle=False, num_workers=4, pin_memory=True,
             sampler=train_sampler)
         self._test_loader = torch.utils.data.DataLoader(
-            test_data, batch_size=min(16, self._options['batch_size']),
+            test_data, batch_size=self._options['batch_size'],
             shuffle=False, num_workers=4, pin_memory=True,
             sampler=test_sampler)
 
@@ -152,6 +152,7 @@ class BCNNManager(object):
             print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
         for t in range(self._options['epochs']):
             t0 = time.time()
+            self._train_loader.sampler.set_epoch(t)
             epoch_loss = []
             num_correct = 0
             num_total = 0
