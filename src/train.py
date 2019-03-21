@@ -166,7 +166,7 @@ class BCNNManager(object):
                 # Forward pass.
                 score = self._net(X)
                 loss = self._criterion(score, y)
-                epoch_loss.append(loss.data.item())
+                epoch_loss.append(loss.item())
                 # Prediction.
                 _, prediction = torch.max(score.data, 1)
                 num_total += y.size(0)
@@ -175,13 +175,8 @@ class BCNNManager(object):
                 loss.backward()
                 self._solver.step()
 
-            # Release cuda cache of the last batch of trainig data
-            torch.cuda.empty_cache()
-
             test_acc = self._accuracy(self._test_loader)
             self._scheduler.step(test_acc)
-            # Release cuda cache of the last batch of test data
-            torch.cuda.empty_cache()
 
             if hvd.rank() == 0:
                 train_acc = 100 * num_correct / num_total
@@ -211,21 +206,21 @@ class BCNNManager(object):
         self._net.train(False)
         num_correct = 0
         num_total = 0
-        for X, y in data_loader:
-            # Data.
-            X = torch.autograd.Variable(X.cuda())
-            y = torch.autograd.Variable(y.cuda(async=True))
+        with torch.no_grad():
+            for X, y in data_loader:
+                # Data.
+                X = torch.autograd.Variable(X.cuda())
+                y = torch.autograd.Variable(y.cuda(async=True))
 
-            # Prediction.
-            score = self._net(X)
-            _, prediction = torch.max(score.data, 1)
-            num_total += y.size(0)
-            num_correct += torch.sum(prediction == y.data)
+                # Prediction.
+                score = self._net(X)
+                _, prediction = torch.max(score.data, 1)
+                num_total += y.size(0)
+                num_correct += torch.sum(prediction == y.data).item()
         self._net.train(True)  # Set the model to training phase
         num_total = hvd.allreduce(torch.tensor(num_total), average=False).data.item()
-        num_correct = hvd.allreduce(
-            num_correct.detach().cpu(), average=False).type(torch.cuda.FloatTensor)
-        return 100 * num_correct / num_total
+        num_correct = hvd.allreduce(torch.tensor(num_correct), average=False).data.item()
+        return 100. * num_correct / num_total
 
     def getStat(self):
         """Get the mean and std value for a certain dataset."""
