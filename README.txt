@@ -19,8 +19,10 @@ REFERENCE
 
 
 PREREQUIREMENTS
-    Python3.6 with Numpy supported
-    PyTorch
+    python>=3.5.2
+    torch>=0.4.0
+    torchvision>=0.2.1
+    horovod>=0.15.2
 
 
 LAYOUT
@@ -31,7 +33,6 @@ LAYOUT
 
 
 USAGE
-<<<<<<< HEAD
     Step 1. Fine-tune the fc layer only. It gives 77.32% test set accuracy on CUB200 and 70.01% test set accuracy on FGVC-Aircraft.
     $ CUDA_VISIBLE_DEVICES=0,1 mpirun -np 2 \
           -H localhost:2 \
