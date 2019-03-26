@@ -19,8 +19,9 @@ REFERENCE
 
 
 PREREQUIREMENTS
-    Python3.6 with Numpy supported
-    PyTorch
+    python>=3.5.2
+    torch>=0.4.0
+    torchvision>=0.2.1
 
 
 LAYOUT
@@ -31,15 +32,19 @@ LAYOUT
 
 
 USAGE
-    Step 1. Fine-tune the fc layer only. It gives 76.77% test set accuracy on CUB200 and 70.06% test set accuracy on FGVC-Aircraft.
-    $ CUDA_VISIBLE_DEVICES=0,1 ./src/train.py fc --base_lr 1.0 \
-          --batch_size 32 --epochs 55 --weight_decay 1e-8 \
+    Step 1. Fine-tune the fc layer only. It gives 77.44% test set accuracy on CUB200 and 70.19% test set accuracy on FGVC-Aircraft.
+    $ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
+          --nproc_per_node=2 \
+          ./src/train.py fc --base_lr 1e-0 \
+          --batch_size 16 --epochs 55 --weight_decay 1e-8 \
           --dataset cub200 \
           | tee "[fc-] base_lr_1.0-weight_decay_1e-8-epoch_.log"
 
-    Step 2. Fine-tune all layers. It gives 84.17% test set accuracy on CUB200 and 81.70% test set accuracy on FGVC-Aircraft.
-    $ CUDA_VISIBLE_DEVICES=0,1 ./src/train.py all --base_lr 1e-3 \
-          --batch_size 32 --epochs 25 --weight_decay 1e-5 \
+    Step 2. Fine-tune all layers. It gives 83.72% test set accuracy on CUB200 and 82.78% test set accuracy on FGVC-Aircraft.
+    $ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
+          --nproc_per_node=2 \
+          ./src/train.py all --base_lr 1e-3 \
+          --batch_size 8 --epochs 25 --weight_decay 1e-5 \
           --dataset cub200 --model "model.pth" \
           | tee "[all-] base_lr_1e-2-weight_decay_1e-5-epoch_.log"
 

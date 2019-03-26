@@ -3,7 +3,9 @@
 """Train bilinear CNN.
 
 Usage:
-    CUDA_VISIBLE_DEVICES=0,1 python src/train.py fc --base_lr 1.0 \
+    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
+    --nproc_per_node=2 \
+    src/train.py fc --base_lr 1e-0 \
     --batch_size 16 --epochs 55 --weight_decay 1e-8 \
     --dataset aircraft \
     | tee "[fc-] base_lr_1.0-weight_decay_1e-8-epoch_.log"
@@ -17,6 +19,8 @@ import os
 import time
 
 import torch
+import torch.distributed as dist
+from torch.utils.data import distributed
 import torchvision
 
 import cub200
@@ -68,16 +72,20 @@ class BCNNManager(object):
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
         self._net = BCNN(num_classes=num_classes, pretrained=options['target'] == 'fc')
-        self._net = torch.nn.DataParallel(self._net).cuda()
         # Load the model from disk.
         if options['target'] == 'all':
             self._net.load_state_dict(torch.load(self._path['model']))
-        print(self._net)
+        self._net = torch.nn.parallel.DistributedDataParallel(
+            self._net.cuda(),
+            device_ids=[self._options['local_rank']],
+            output_device=self._options['local_rank'])
+        if dist.get_rank() == 0:
+            print(self._net)
         # Criterion.
         self._criterion = torch.nn.CrossEntropyLoss().cuda()
         # Solver.
         self._solver = torch.optim.SGD(
-            self._net.module.trainable_params, lr=self._options['base_lr'],
+            self._net.module.trainable_params, lr=self._options['base_lr'] * dist.get_world_size(),
             momentum=0.9, weight_decay=self._options['weight_decay'])
         self._scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self._solver, mode='max', factor=0.1, patience=3, verbose=True,
@@ -114,21 +122,31 @@ class BCNNManager(object):
                 transform=test_transforms)
         else:
             raise NotImplementedError("Dataset "+self._options['dataset']+" is not implemented.")
+        # Partition dataset among workers using DistributedSampler
+        train_sampler = distributed.DistributedSampler(
+            train_data, num_replicas=dist.get_world_size(), rank=dist.get_rank())
+        test_sampler = distributed.DistributedSampler(
+            test_data, num_replicas=dist.get_world_size(), rank=dist.get_rank())
+
         self._train_loader = torch.utils.data.DataLoader(
             train_data, batch_size=self._options['batch_size'],
-            shuffle=True, num_workers=4, pin_memory=True)
+            shuffle=False, num_workers=4, pin_memory=True,
+            sampler=train_sampler)
         self._test_loader = torch.utils.data.DataLoader(
             test_data, batch_size=self._options['batch_size'],
-            shuffle=False, num_workers=4, pin_memory=True)
+            shuffle=False, num_workers=4, pin_memory=True,
+            sampler=test_sampler)
 
     def train(self):
         """Train the network."""
-        print('Training.')
         best_acc = 0.0
         best_epoch = None
-        print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
+        if dist.get_rank() == 0:
+            print('Training.')
+            print('Epoch\tTrain loss\tTrain acc\tTest acc\tTrain time')
         for t in range(self._options['epochs']):
             t0 = time.time()
+            self._train_loader.sampler.set_epoch(t)
             epoch_loss = []
             num_correct = 0
             num_total = 0
@@ -151,25 +169,24 @@ class BCNNManager(object):
                 loss.backward()
                 self._solver.step()
 
-            # Release cuda cache of the last batch of trainig data
-            torch.cuda.empty_cache()
-
-            train_acc = 100 * num_correct / num_total
             test_acc = self._accuracy(self._test_loader)
             self._scheduler.step(test_acc)
-            if test_acc > best_acc:
-                best_acc = test_acc
-                best_epoch = t + 1
-                print('*', end='')
-                # Save model onto disk.
-                torch.save(self._net.state_dict(),
-                           os.path.join(self._path['model_dir'],
-                                        'vgg_16_epoch_%d.pth' % (t + 1)))
-            print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
-                  (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
-            # Release cuda cache of the last batch of test data
-            torch.cuda.empty_cache()
-        print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
+
+            if dist.get_rank() == 0:
+                train_acc = 100 * num_correct / num_total
+                if test_acc > best_acc:
+                    best_acc = test_acc
+                    best_epoch = t + 1
+                    print('*', end='')
+                    # Save model onto disk.
+                    torch.save(self._net.module.state_dict(),
+                               os.path.join(self._path['model_dir'],
+                                            'vgg_16_epoch_%d.pth' % (t + 1)))
+                print('%d\t%4.3f\t\t%4.2f%%\t\t%4.2f%%\t\t%4.2fs' %
+                      (t+1, sum(epoch_loss) / len(epoch_loss), train_acc, test_acc, time.time()-t0))
+
+        if dist.get_rank() == 0:
+            print('Best at epoch %d, test accuaray %f' % (best_epoch, best_acc))
 
     def _accuracy(self, data_loader):
         """Compute the train/test accuracy.
@@ -195,7 +212,11 @@ class BCNNManager(object):
                 num_total += y.size(0)
                 num_correct += torch.sum(prediction == y.data).item()
         self._net.train(True)  # Set the model to training phase
-        return 100 * num_correct / num_total
+        num_total = torch.tensor(num_total).cuda()
+        num_correct = torch.tensor(num_correct).cuda()
+        dist.all_reduce(num_total, op=dist.ReduceOp.SUM)
+        dist.all_reduce(num_correct, op=dist.ReduceOp.SUM)
+        return 100 * num_correct.data.item() / num_total.data.item()
 
     def getStat(self):
         """Get the mean and std value for a certain dataset."""
@@ -237,6 +258,7 @@ def main():
                         help='Model for fine-tuning.')
     parser.add_argument('--dataset', dest='dataset', type=str, default="cub200",
                         help='The dataset for training.')
+    parser.add_argument("--local_rank", type=int)
     args = parser.parse_args()
     if args.base_lr <= 0:
         raise AttributeError('--base_lr parameter must >0.')
@@ -254,6 +276,7 @@ def main():
         'epochs': args.epochs,
         'weight_decay': args.weight_decay,
         'dataset': args.dataset,
+        'local_rank': args.local_rank
     }
 
     project_root = os.popen('pwd').read().strip()
@@ -272,6 +295,11 @@ def main():
                 assert os.path.isfile(path[d])
             else:
                 assert os.path.isdir(path[d])
+
+    # Initialize process group
+    torch.distributed.init_process_group(backend="nccl", init_method='env://')
+    # Pin GPU to be used to process local rank (one GPU per process)
+    torch.cuda.set_device(options['local_rank'])
 
     manager = BCNNManager(options, path)
     # manager.getStat()
